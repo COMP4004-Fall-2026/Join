@@ -3,6 +3,9 @@ on:
   issues:
     types: [opened]
 
+permissions:
+  issues: write
+
 jobs:
   invite:
     runs-on: ubuntu-latest
@@ -19,19 +22,53 @@ jobs:
           fi
 
       - name: Invite User to Org
+        id: invite
         if: steps.check.outputs.match == 'true'
-        uses: ActionsDesk/invite-user@v2
+        uses: actions/github-script@v9
         with:
-          token: ${{ secrets.ORG_INVITE_TOKEN }}
-          user: ${{ github.actor }}
-          org: ${{ github.repository_owner }}
+          github-token: ${{ secrets.ORG_INVITE_TOKEN }}
+          script: |
+            const inviteUrl = `https://github.com/orgs/${context.repo.owner}/invitation`;
+            try {
+              const { data: user } = await github.rest.users.getByUsername({
+                username: context.actor,
+              });
+              await github.rest.orgs.createInvitation({
+                org: context.repo.owner,
+                invitee_id: user.id,
+              });
+              core.setOutput('status', 'invited');
+              core.setOutput('message', `Invitation sent! Check your email or go to ${inviteUrl} to accept.`);
+            } catch (error) {
+              if (error.status === 422) {
+                core.setOutput('status', 'already');
+                core.setOutput('message', `You already have a pending invitation or are a member. Go to ${inviteUrl} to accept.`);
+              } else {
+                core.setOutput('status', 'failed');
+                core.setOutput('message', `Could not send an invite (HTTP ${error.status ?? 'unknown'}). A maintainer will follow up.`);
+                core.setFailed(`Invite failed: ${error.message}`);
+              }
+            }
 
-      - name: Close Issue & Reply
-        if: steps.check.outputs.match == 'true'
-        uses: peter-evans/create-or-response@v2
+      - name: Reply & Close Issue
+        if: always() && steps.check.outputs.match == 'true'
+        uses: actions/github-script@v9
+        env:
+          INVITE_STATUS: ${{ steps.invite.outputs.status }}
+          INVITE_MESSAGE: ${{ steps.invite.outputs.message }}
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          issue-number: ${{ github.event.issue.number }}
-          body: |
-            Invitation sent! Check your email or go to https://github.com/orgs/${{ github.repository_owner }}/invitation to accept.
-          state: close
+          script: |
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body: process.env.INVITE_MESSAGE,
+            });
+            if (process.env.INVITE_STATUS !== 'failed') {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                state: 'closed',
+              });
+            }
