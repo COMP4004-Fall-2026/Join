@@ -1,0 +1,37 @@
+name: Invite Member
+on:
+  issues:
+    types: [opened]
+
+jobs:
+  invite:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check issue title
+        id: check
+        env:
+          TITLE: ${{ github.event.issue.title }}
+        run: |
+          if grep -Eiq '^Add .+ to Class$' <<< "$TITLE"; then
+            echo "match=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "match=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Invite User to Org
+        if: steps.check.outputs.match == 'true'
+        uses: ActionsDesk/invite-user@v2
+        with:
+          token: ${{ secrets.ORG_INVITE_TOKEN }}
+          user: ${{ github.actor }}
+          org: ${{ github.repository_owner }}
+
+      - name: Close Issue & Reply
+        if: steps.check.outputs.match == 'true'
+        uses: peter-evans/create-or-response@v2
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          issue-number: ${{ github.event.issue.number }}
+          body: |
+            Invitation sent! Check your email or go to https://github.com/orgs/${{ github.repository_owner }}/invitation to accept.
+          state: close
